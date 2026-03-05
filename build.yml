@@ -1,0 +1,99 @@
+name: Build Mystery Temple APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download external libraries
+        run: |
+          mkdir -p app/src/main/assets/www/libs
+          
+          echo "Downloading Three.js..."
+          curl -sL "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" \
+            -o app/src/main/assets/www/libs/three.min.js
+          
+          echo "Downloading Supabase..."
+          curl -sL "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js" \
+            -o app/src/main/assets/www/libs/supabase.min.js
+          
+          echo "Downloading MediaPipe Hands..."
+          curl -sL "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" \
+            -o app/src/main/assets/www/libs/hands.js
+          
+          echo "Downloading MediaPipe Camera Utils..."
+          curl -sL "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" \
+            -o app/src/main/assets/www/libs/camera_utils.js
+          
+          echo "Downloading MediaPipe Control Utils..."
+          curl -sL "https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" \
+            -o app/src/main/assets/www/libs/control_utils.js
+          
+          ls -lh app/src/main/assets/www/libs/
+
+      - name: Patch HTML files to use local libraries
+        run: python3 patch_html.py
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Sign APK
+        run: |
+          # Generate keystore
+          keytool -genkeypair -v \
+            -keystore mystery_temple.keystore \
+            -alias mysterytemple \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass mysterytemple123 \
+            -keypass mysterytemple123 \
+            -dname "CN=MysteryTemple,O=Game,C=LK"
+          
+          # Find build tools
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          echo "Using build tools: $BUILD_TOOLS"
+          
+          # Zipalign
+          $BUILD_TOOLS/zipalign -v -f 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            app/build/outputs/apk/release/app-release-aligned.apk
+          
+          # Sign
+          $BUILD_TOOLS/apksigner sign \
+            --ks mystery_temple.keystore \
+            --ks-key-alias mysterytemple \
+            --ks-pass pass:mysterytemple123 \
+            --key-pass pass:mysterytemple123 \
+            --out MysteryTemple.apk \
+            app/build/outputs/apk/release/app-release-aligned.apk
+          
+          echo "APK size: $(du -sh MysteryTemple.apk)"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MysteryTemple-APK
+          path: MysteryTemple.apk
+          retention-days: 30
